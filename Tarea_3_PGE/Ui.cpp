@@ -431,3 +431,6 @@ void DrawBitmapFromResource(HDC hdc, int x, int y, int resId) {
     DeleteDC(hMemDC);
     DeleteObject(hBmp);
 }
+
+
+//hola
