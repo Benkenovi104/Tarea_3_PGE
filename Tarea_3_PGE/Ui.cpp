@@ -437,3 +437,6 @@ void DrawBitmapFromResource(HDC hdc, int x, int y, int resId) {
 
 
 //segundo mensaje
+
+
+//tercer mensaje
