@@ -35,6 +35,25 @@ static const PlatoDef kPlatos[] = {
 static Plato g_platoSeleccionado = PLATO_RANAS;
 static std::vector<RECT> g_platoRects; // mismos índices que kPlatos
 
+// ---- Especialidades ----
+enum Especial { ESP_NONE, ESP_QUINOTOS, ESP_MONDONGO, ESP_RINONES, ESP_CALAMARETTIS };
+struct EspDef { Especial id; const wchar_t* nombre; int recurso; };
+
+static const EspDef kEspeciales[] = {
+    { ESP_QUINOTOS,     L"Quinotos al Rhum con Helado de Americana", IDB_QUINTOS },
+    { ESP_MONDONGO,     L"Mondongo a la Italiana",                    IDB_MONDONGO },
+    { ESP_RINONES,      L"Riñones al Vino Blanco",                    IDB_RINONES },
+    { ESP_CALAMARETTIS, L"Calamarettis a la Escarpetta",              IDB_CALAMARETTIS },
+};
+static Especial g_especialSeleccionada = ESP_QUINOTOS;
+static std::vector<RECT> g_especialRects; // mismos índices que kEspeciales
+
+// Scroll (solo se usa en SEC_CARTA)
+static int g_vscrollPos = 0;      // píxeles
+static int g_vscrollMax = 0;      // píxeles (máximo desplazable)
+static int g_viewportH = 0;       // alto visible del "card"
+static int g_contentH = 0;       // alto total del contenido dentro del card
+
 static const int kHeaderHeight = 140;
 static const int kSectionBarHeight = 48;
 
@@ -112,6 +131,44 @@ void DrawRoundedRect(HDC hdc, const RECT& r, int radius, COLORREF fill, COLORREF
     RoundRect(hdc, r.left, r.top, r.right, r.bottom, S(radius), S(radius));
     SelectObject(hdc, oldB); SelectObject(hdc, oldP);
     DeleteObject(hBrush); DeleteObject(hPen);
+}
+
+// -------------------- Scroll helpers --------------------
+static void EnsureVScrollStyle(HWND hWnd, bool enable) {
+    LONG_PTR style = GetWindowLongPtrW(hWnd, GWL_STYLE);
+    bool has = (style & WS_VSCROLL) != 0;
+    if (enable && !has) {
+        SetWindowLongPtrW(hWnd, GWL_STYLE, style | WS_VSCROLL);
+        SetWindowPos(hWnd, nullptr, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+    else if (!enable && has) {
+        SetWindowLongPtrW(hWnd, GWL_STYLE, style & ~WS_VSCROLL);
+        SetWindowPos(hWnd, nullptr, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+    }
+    ShowScrollBar(hWnd, SB_VERT, enable ? TRUE : FALSE);
+}
+
+static void ApplyScrollBar(HWND hWnd) {
+    if (g_section != SEC_CARTA) {
+        g_vscrollPos = 0;
+        g_vscrollMax = 0;
+        EnsureVScrollStyle(hWnd, false);
+        return;
+    }
+    int maxScroll = max(0, g_contentH - g_viewportH);
+    g_vscrollMax = maxScroll;
+    if (g_vscrollPos > g_vscrollMax) g_vscrollPos = g_vscrollMax;
+
+    SCROLLINFO si{};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_PAGE | SIF_RANGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = g_contentH > 0 ? (g_contentH - 1) : 0;
+    si.nPage = g_viewportH > 0 ? g_viewportH : 0;
+    si.nPos = g_vscrollPos;
+
+    EnsureVScrollStyle(hWnd, g_vscrollMax > 0);
+    SetScrollInfo(hWnd, SB_VERT, &si, TRUE);
 }
 
 // -------------------- Pintado --------------------
@@ -201,64 +258,72 @@ static void DrawBitmapFromResourceFitRect(HDC hdc, const RECT& dest, int resId) 
     DeleteObject(hBmp);
 }
 
-
-// Contenido
+// -------------------- Contenido --------------------
 void PaintContent(HDC hdc, const RECT& rcClient) {
-    RECT bar = SectionBarRect(rcClient);
-    RECT content{ rcClient.left + S(24), bar.bottom + S(20), rcClient.right - S(24), rcClient.bottom - S(24) };
+    RECT card = GetContentCardRect(rcClient);
 
-    RECT card = content; InflateRect(&card, -S(4), -S(4));
+    // Sombra + card
     RECT shadow = card; OffsetRect(&shadow, S(3), S(3));
     FillRectColor(hdc, shadow, RGB(230, 230, 230));
     DrawRoundedRect(hdc, card, 16, RGB(255, 255, 255), RGB(235, 215, 190));
 
     int pad = S(20);
-    int x = card.left + pad; int y = card.top + pad; int w = (card.right - card.left) - 2 * pad;
+    int x = card.left + pad;
+    int y = card.top + pad;
+    int w = (card.right - card.left) - 2 * pad;
+
+    // Por defecto (secciones sin scroll)
+    g_viewportH = card.bottom - card.top;
+    g_contentH = g_viewportH;
 
     switch (g_section) {
     case SEC_INICIO:
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Bienvenido a la Cantina");
         y += S(40);
-        DrawParagraph(hdc, x, y, w,
-            L"Clásico bodegón porteño en La Paternal...");
+        DrawParagraph(hdc, x, y, w, L"Clásico bodegón porteño en La Paternal...");
         break;
+
     case SEC_CARTA: {
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Nuestra Carta");
-        y += S(44); // más espacio debajo del título
+        // Clip para que el scroll no se dibuje fuera del card
+        RECT clip = card; InflateRect(&clip, -S(8), -S(8));
+        HRGN rgn = CreateRectRgn(clip.left, clip.top, clip.right, clip.bottom);
+        SelectClipRgn(hdc, rgn);
+
+        // Offset por scroll
+        const int yOff = -g_vscrollPos;
+
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y + yOff, L"Nuestra Carta");
+        int yAfterTitle = y + S(44); // espacio debajo del título
 
         // Columnas: izquierda = lista, derecha = imagen
         const int leftColW = S(300);
-        const int buttonH = S(36);   // botones más altos
-        const int buttonGap = S(12); // más aire entre botones
+        const int buttonH = S(36);
+        const int buttonGap = S(12);
 
-        // Rect de imagen (más grande y menos pegada a la derecha)
         RECT imgRect{
-            card.right - pad - S(400),   // ancho imagen ~400
-            card.top + pad,
+            card.right - pad - S(400),
+            card.top + pad + yOff,
             card.right - pad,
-            card.top + pad + S(300)      // alto imagen ~300
+            card.top + pad + S(300) + yOff
         };
 
-        // Guardar rects de platos para el hit-test
+        // ---- Lista de PLATOS (arriba) ----
         g_platoRects.clear();
-        int yBtn = y;
+        int yBtn = yAfterTitle;
         for (const auto& p : kPlatos) {
-            RECT r{ x, yBtn, x + leftColW, yBtn + buttonH };
+            RECT logical{ x, yBtn, x + leftColW, yBtn + buttonH }; // sin scroll
+            RECT r = logical; OffsetRect(&r, 0, yOff);             // con scroll
             g_platoRects.push_back(r);
 
             COLORREF fondo = (g_platoSeleccionado == p.id) ? RGB(255, 245, 230) : RGB(255, 255, 255);
             DrawRoundedRect(hdc, r, 8, fondo, RGB(210, 190, 160));
-
-            // Texto centrado verticalmente en el botón
             DrawTextLine(hdc, g_hFontText, RGB(30, 30, 30), r.left + S(12), r.top + (buttonH / 4), p.nombre);
 
             yBtn += buttonH + buttonGap;
         }
 
-        // Marco suave para la imagen
+        // Marco + imagen de Platos
         DrawRoundedRect(hdc, imgRect, 12, RGB(255, 255, 255), RGB(235, 215, 190));
-
-        // Imagen del plato seleccionado dentro del rect
         for (const auto& p : kPlatos) {
             if (p.id == g_platoSeleccionado) {
                 RECT inner = imgRect; InflateRect(&inner, -S(14), -S(14));
@@ -267,49 +332,79 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             }
         }
 
-        // ---- Especialidades debajo ----
-        int yEspecial = max(yBtn, imgRect.bottom) + S(36);
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yEspecial, L"Nuestras Especialidades");
-        yEspecial += S(44);
-        DrawParagraph(hdc, x, yEspecial, (card.right - card.left) - 2 * pad,
-            L"• Quinotos al Rhun con Helado de Americana\n"
-            L"• Mondongo a la Italiana\n"
-            L"• Rinones al Vino Blanco\n"
-            L"• Calamarettis a la Escarpetta");
+        // ---- ESPECIALIDADES (debajo, misma interacción) ----
+        int yEspecialTitle = max(yBtn, (imgRect.bottom - yOff)) + S(36); // lógico (sin yOff)
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yEspecialTitle + yOff, L"Nuestras Especialidades");
+
+        int yEspBtns = yEspecialTitle + S(44);
+
+        RECT imgRectEsp{
+            card.right - pad - S(400),
+            yEspecialTitle + yOff,
+            card.right - pad,
+            yEspecialTitle + S(280) + yOff
+        };
+
+        g_especialRects.clear();
+        int yBtnEsp = yEspBtns;
+        for (const auto& e : kEspeciales) {
+            RECT logical{ x, yBtnEsp, x + leftColW, yBtnEsp + buttonH };
+            RECT r = logical; OffsetRect(&r, 0, yOff);
+            g_especialRects.push_back(r);
+
+            COLORREF fondo = (g_especialSeleccionada == e.id) ? RGB(255, 245, 230) : RGB(255, 255, 255);
+            DrawRoundedRect(hdc, r, 8, fondo, RGB(210, 190, 160));
+            DrawTextLine(hdc, g_hFontText, RGB(30, 30, 30), r.left + S(12), r.top + (buttonH / 4), e.nombre);
+
+            yBtnEsp += buttonH + buttonGap;
+        }
+
+        // Marco + imagen de Especialidad
+        DrawRoundedRect(hdc, imgRectEsp, 12, RGB(255, 255, 255), RGB(235, 215, 190));
+        for (const auto& e : kEspeciales) {
+            if (e.id == g_especialSeleccionada) {
+                RECT inner = imgRectEsp; InflateRect(&inner, -S(14), -S(14));
+                DrawBitmapFromResourceFitRect(hdc, inner, e.recurso);
+                break;
+            }
+        }
+
+        // ---- Medimos alto total lógico del contenido (sin offset) ----
+        int logicalBottom = max(yBtnEsp, (imgRectEsp.bottom - yOff)) + S(20); // margen
+        g_viewportH = card.bottom - card.top;
+        g_contentH = (logicalBottom - card.top) + S(10);
+
+        // Quitamos el clip
+        SelectClipRgn(hdc, nullptr);
+        DeleteObject(rgn);
     } break;
 
     case SEC_HISTORIA:
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Historia");
         y += S(36);
-        DrawParagraph(hdc, x, y, w,
-            L"Desde 1956, Cantina Chichilo es un ícono de barrio...");
+        DrawParagraph(hdc, x, y, w, L"Desde 1956, Cantina Chichilo es un ícono de barrio...");
         break;
+
     case SEC_HORARIOS:
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Horarios");
         y += S(50);
-        DrawParagraph(hdc, x, y, w,
-            L"-De Jueves a Sábado 20:30 a 00:00 hs");
+        DrawParagraph(hdc, x, y, w, L"-De Jueves a Sábado 20:30 a 00:00 hs");
         y += S(30);
-        DrawParagraph(hdc, x, y, w,
-            L"-Sabados y Domingos de 12:30 a 14:30 hs");
+        DrawParagraph(hdc, x, y, w, L"-Sábados y Domingos de 12:30 a 14:30 hs");
         break;
+
     case SEC_CONTACTO:
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Contacto");
         y += S(50);
-        DrawParagraph(hdc, x, y, w,
-            L"Dirección: Camarones 1901, Esquina terrero 2006");
+        DrawParagraph(hdc, x, y, w, L"Dirección: Camarones 1901, Esquina Terrero 2006");
         y += S(30);
-        DrawParagraph(hdc, x, y, w,
-            L"Capital Federal");
+        DrawParagraph(hdc, x, y, w, L"Capital Federal");
         y += S(30);
-        DrawParagraph(hdc, x, y, w,
-            L"Reservas al telefono: 011-4581-1984 o al 011-4584-1263");
+        DrawParagraph(hdc, x, y, w, L"Reservas: 011-4581-1984 / 011-4584-1263");
         y += S(30);
-        DrawParagraph(hdc, x, y, w,
-            L"Email de Contacto del lugar: cantinachichilo@cantinachichilo.com.ar");
+        DrawParagraph(hdc, x, y, w, L"Email: cantinachichilo@cantinachichilo.com.ar");
         y += S(30);
-        DrawParagraph(hdc, x, y, w,
-            L"Email: chichilo3554@hotmail.com");
+        DrawParagraph(hdc, x, y, w, L"Email: chichilo3554@hotmail.com");
         break;
     }
 }
@@ -327,6 +422,9 @@ void DoPaint(HWND hWnd) {
     PaintHeader(mem, rc);
     PaintSectionBar(mem, rc);
     PaintContent(mem, rc);
+
+    // Actualizamos la barra de scroll con las medidas calculadas
+    ApplyScrollBar(hWnd);
 
     BitBlt(hdc, 0, 0, rc.right - rc.left, rc.bottom - rc.top, mem, 0, 0, SRCCOPY);
     SelectObject(mem, oldBmp); DeleteObject(bmp); DeleteDC(mem);
@@ -356,6 +454,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         UpdateDPI(hWnd);
         SetMica(hWnd);
         return 0;
+
     case WM_DPICHANGED:
         g_dpi = HIWORD(wParam);
         DeleteFonts(); InitFonts();
@@ -364,8 +463,49 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 prcNew->bottom - prcNew->top, TRUE);
         InvalidateRect(hWnd, nullptr, TRUE);
         return 0;
+
     case WM_SIZE:
-        InvalidateRect(hWnd, nullptr, TRUE); return 0;
+        InvalidateRect(hWnd, nullptr, TRUE);
+        return 0;
+
+    case WM_MOUSEWHEEL:
+        if (g_section == SEC_CARTA && g_vscrollMax > 0) {
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam); // 120 por notch
+            int step = S(60);
+            if (delta > 0) g_vscrollPos = max(0, g_vscrollPos - step);
+            else           g_vscrollPos = min(g_vscrollMax, g_vscrollPos + step);
+            SetScrollPos(hWnd, SB_VERT, g_vscrollPos, TRUE);
+            InvalidateRect(hWnd, nullptr, TRUE);
+        }
+        return 0;
+
+    case WM_VSCROLL: {
+        if (g_section != SEC_CARTA) return 0;
+        SCROLLINFO si{}; si.cbSize = sizeof(si); si.fMask = SIF_ALL;
+        GetScrollInfo(hWnd, SB_VERT, &si);
+        int pos = g_vscrollPos;
+        int page = max(1, g_viewportH - S(40));
+
+        switch (LOWORD(wParam)) {
+        case SB_LINEUP:        pos -= S(30); break;
+        case SB_LINEDOWN:      pos += S(30); break;
+        case SB_PAGEUP:        pos -= page;  break;
+        case SB_PAGEDOWN:      pos += page;  break;
+        case SB_THUMBPOSITION:
+        case SB_THUMBTRACK:    pos = si.nTrackPos; break;
+        case SB_TOP:           pos = 0; break;
+        case SB_BOTTOM:        pos = g_vscrollMax; break;
+        default: break;
+        }
+        pos = max(0, min(g_vscrollMax, pos));
+        if (pos != g_vscrollPos) {
+            g_vscrollPos = pos;
+            SetScrollPos(hWnd, SB_VERT, g_vscrollPos, TRUE);
+            InvalidateRect(hWnd, nullptr, TRUE);
+        }
+        return 0;
+    }
+
     case WM_LBUTTONUP: {
         RECT rc; GetClientRect(hWnd, &rc);
         POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -376,16 +516,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         for (size_t i = 0; i < rects.size(); ++i) {
             if (PtInRect(&rects[i], pt)) {
                 g_section = kTabs[i].id;
+                // al cambiar de sección, reseteamos el scroll
+                g_vscrollPos = 0;
                 InvalidateRect(hWnd, nullptr, TRUE);
                 return 0;
             }
         }
 
-        // Botones de platos (solo si estamos en Carta)
+        // Interacciones de Carta
         if (g_section == SEC_CARTA) {
             for (size_t i = 0; i < g_platoRects.size(); ++i) {
                 if (PtInRect(&g_platoRects[i], pt)) {
                     g_platoSeleccionado = kPlatos[i].id;
+                    InvalidateRect(hWnd, nullptr, TRUE);
+                    return 0;
+                }
+            }
+            for (size_t i = 0; i < g_especialRects.size(); ++i) {
+                if (PtInRect(&g_especialRects[i], pt)) {
+                    g_especialSeleccionada = kEspeciales[i].id;
                     InvalidateRect(hWnd, nullptr, TRUE);
                     return 0;
                 }
@@ -395,9 +544,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_PAINT:
-        DoPaint(hWnd); return 0;
+        DoPaint(hWnd);
+        return 0;
+
     case WM_DESTROY:
-        DeleteFonts(); PostQuitMessage(0); return 0;
+        DeleteFonts(); PostQuitMessage(0);
+        return 0;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
@@ -414,14 +566,11 @@ void RegisterChichiloWindow(HINSTANCE hInst) {
     RegisterClassExW(&wc);
 }
 
-
 void DrawBitmapFromResource(HDC hdc, int x, int y, int resId) {
     HBITMAP hBmp = LoadBitmap(GetModuleHandle(nullptr), MAKEINTRESOURCE(resId));
     if (!hBmp) return;
 
-    BITMAP bm;
-    GetObject(hBmp, sizeof(bm), &bm);
-
+    BITMAP bm; GetObject(hBmp, sizeof(bm), &bm);
     HDC hMemDC = CreateCompatibleDC(hdc);
     HGDIOBJ oldBmp = SelectObject(hMemDC, hBmp);
 
@@ -431,15 +580,3 @@ void DrawBitmapFromResource(HDC hdc, int x, int y, int resId) {
     DeleteDC(hMemDC);
     DeleteObject(hBmp);
 }
-
-
-//hola
-
-
-//segundo mensaje
-
-
-//tercer mensaje
-
-
-//Purrini bambini

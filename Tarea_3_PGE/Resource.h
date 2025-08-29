@@ -9,7 +9,7 @@
 #define IDB_MERLUZA   204
 #define IDB_GAMBAS    205
 #define IDB_CALAMARETTIS 206
-#define IDB_MONDONGO  207s
+#define IDB_MONDONGO  207
 #define IDB_QUINTOS   208
 #define IDB_RINONES   209
 
