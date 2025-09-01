@@ -388,9 +388,19 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
     case SEC_HORARIOS:
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Horarios");
         y += S(50);
-        DrawParagraph(hdc, x, y, w, L"-De Jueves a Sábado 20:30 a 00:00 hs");
-        y += S(30);
-        DrawParagraph(hdc, x, y, w, L"-Sábados y Domingos de 12:30 a 14:30 hs");
+        DrawParagraph(hdc, x, y, w, L"-Lunes de 20:30 a 00:00 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Martes de 20:30 a 00:00 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Miercoles de 20:30 a 00:00 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Jueves de 20:30 a 00:00 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Viernes de 20:30 a 00:00 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Sábados de 12:30 a 14:30 hs");
+        y += S(40);
+        DrawParagraph(hdc, x, y, w, L"-Domingos de 12:30 a 14:30 hs");
         break;
 
     case SEC_CONTACTO:
