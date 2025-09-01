@@ -69,16 +69,16 @@
     <Image Include="rabas.bmp">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="calamarettis.bmp">
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\quintos.bmp">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="mondongo.bmp">
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\mondongo.bmp">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="quintos.bmp">
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\calamarettis.bmp">
       <Filter>Resource Files</Filter>
     </Image>
-    <Image Include="rinones.bmp">
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\rinones.bmp">
       <Filter>Resource Files</Filter>
     </Image>
   </ItemGroup>

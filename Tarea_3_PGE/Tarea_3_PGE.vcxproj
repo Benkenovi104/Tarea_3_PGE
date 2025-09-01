@@ -142,15 +142,15 @@
     <ResourceCompile Include="Tarea_3_PGE.rc" />
   </ItemGroup>
   <ItemGroup>
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\calamarettis.bmp" />
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\mondongo.bmp" />
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\quintos.bmp" />
+    <Image Include="..\..\..\..\..\..\..\..\Downloads\rinones.bmp" />
     <Image Include="..\ranas.bmp" />
-    <Image Include="calamarettis.bmp" />
     <Image Include="caracoles.bmp" />
     <Image Include="gambas.bmp" />
     <Image Include="merluza.bmp" />
-    <Image Include="mondongo.bmp" />
-    <Image Include="quintos.bmp" />
     <Image Include="rabas.bmp" />
-    <Image Include="rinones.bmp" />
     <Image Include="small.ico" />
     <Image Include="Tarea_3_PGE.ico" />
   </ItemGroup>
