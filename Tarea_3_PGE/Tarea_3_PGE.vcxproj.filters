@@ -81,5 +81,11 @@
     <Image Include="..\..\..\..\..\..\..\..\Downloads\rinones.bmp">
       <Filter>Resource Files</Filter>
     </Image>
+    <Image Include="mapa.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="frente.bmp">
+      <Filter>Resource Files</Filter>
+    </Image>
   </ItemGroup>
 </Project>

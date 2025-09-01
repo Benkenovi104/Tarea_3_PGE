@@ -148,7 +148,9 @@
     <Image Include="..\..\..\..\..\..\..\..\Downloads\rinones.bmp" />
     <Image Include="..\ranas.bmp" />
     <Image Include="caracoles.bmp" />
+    <Image Include="frente.bmp" />
     <Image Include="gambas.bmp" />
+    <Image Include="mapa.bmp" />
     <Image Include="merluza.bmp" />
     <Image Include="rabas.bmp" />
     <Image Include="small.ico" />

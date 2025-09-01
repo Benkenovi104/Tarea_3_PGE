@@ -12,6 +12,8 @@
 #define IDB_MONDONGO  207
 #define IDB_QUINTOS   208
 #define IDB_RINONES   209
+#define IDB_MAPA   210
+#define IDB_FRENTE   211
 
 #define IDS_APP_TITLE			103
 

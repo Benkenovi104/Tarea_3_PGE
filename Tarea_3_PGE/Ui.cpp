@@ -48,7 +48,7 @@ static const EspDef kEspeciales[] = {
 static Especial g_especialSeleccionada = ESP_QUINOTOS;
 static std::vector<RECT> g_especialRects; // mismos índices que kEspeciales
 
-// Scroll (solo se usa en SEC_CARTA)
+// Scroll (ahora para TODAS las secciones)
 static int g_vscrollPos = 0;      // píxeles
 static int g_vscrollMax = 0;      // píxeles (máximo desplazable)
 static int g_viewportH = 0;       // alto visible del "card"
@@ -87,6 +87,16 @@ void DrawTextLine(HDC hdc, HFONT font, COLORREF color, int x, int y, const std::
     SetBkMode(hdc, TRANSPARENT);
     TextOutW(hdc, x, y, s.c_str(), (int)s.size());
     SelectObject(hdc, old);
+}
+
+// Medir la altura real de un párrafo con word-wrap
+static int MeasureParagraphHeight(HDC hdc, HFONT font, int w, const std::wstring& text) {
+    RECT r{ 0,0,w,0 };
+    HFONT old = (HFONT)SelectObject(hdc, font);
+    DrawTextW(hdc, text.c_str(), (int)text.size(), &r,
+        DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
+    SelectObject(hdc, old);
+    return r.bottom - r.top;
 }
 
 // -------------------- Tabs --------------------
@@ -149,12 +159,6 @@ static void EnsureVScrollStyle(HWND hWnd, bool enable) {
 }
 
 static void ApplyScrollBar(HWND hWnd) {
-    if (g_section != SEC_CARTA) {
-        g_vscrollPos = 0;
-        g_vscrollMax = 0;
-        EnsureVScrollStyle(hWnd, false);
-        return;
-    }
     int maxScroll = max(0, g_contentH - g_viewportH);
     g_vscrollMax = maxScroll;
     if (g_vscrollPos > g_vscrollMax) g_vscrollPos = g_vscrollMax;
@@ -212,7 +216,7 @@ void PaintSectionBar(HDC hdc, const RECT& rcClient) {
 }
 
 void DrawParagraph(HDC hdc, int x, int y, int w, const std::wstring& text) {
-    RECT r{ x, y, x + w, y + S(1000) };
+    RECT r{ x, y, x + w, y + S(2000) };
     HFONT old = (HFONT)SelectObject(hdc, g_hFontText);
     SetTextColor(hdc, RGB(40, 40, 40));
     SetBkMode(hdc, TRANSPARENT);
@@ -272,28 +276,52 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
     int y = card.top + pad;
     int w = (card.right - card.left) - 2 * pad;
 
-    // Por defecto (secciones sin scroll)
+    // Clip y offset de scroll SIEMPRE
+    RECT clip = card; InflateRect(&clip, -S(8), -S(8));
+    HRGN rgn = CreateRectRgn(clip.left, clip.top, clip.right, clip.bottom);
+    SelectClipRgn(hdc, rgn);
+    const int yOff = -g_vscrollPos;
+
+    // Inicializamos viewport y contenido
     g_viewportH = card.bottom - card.top;
     g_contentH = g_viewportH;
 
     switch (g_section) {
-    case SEC_INICIO:
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Bienvenido a la Cantina");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"Clásico bodegón porteño en La Paternal...");
-        break;
+    case SEC_INICIO: {
+        int yCur = y;
+
+        // Título
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yCur + yOff, L"Bienvenido a la Cantina");
+        yCur += S(40);
+
+        // ===== Columna derecha: FRENTE =====
+        const int rightColW = S(420);
+        const int imgH = S(320);
+
+        RECT imgRect{
+            card.right - pad - rightColW,
+            y + yOff,                // alineado arriba del contenido (como en Contacto)
+            card.right - pad,
+            y + imgH + yOff
+        };
+        DrawRoundedRect(hdc, imgRect, 12, RGB(255, 255, 255), RGB(235, 215, 190));
+        RECT imgInner = imgRect; InflateRect(&imgInner, -S(14), -S(14));
+        DrawBitmapFromResourceFitRect(hdc, imgInner, IDB_FRENTE);
+
+        // ===== Columna izquierda: texto =====
+        const int leftColW = w - (rightColW + S(20)); // deja un gap entre columnas
+        std::wstring p1 = L"Clásico bodegón porteño en La Paternal...";
+        DrawParagraph(hdc, x, yCur + yOff, leftColW, p1);
+        int h1 = MeasureParagraphHeight(hdc, g_hFontText, leftColW, p1);
+
+        // Alto lógico total = lo más bajo entre texto e imagen
+        int logicalBottom = max(yCur + h1, (imgRect.bottom - yOff)) + S(20);
+        g_contentH = (logicalBottom - card.top) + S(10);
+    } break;
 
     case SEC_CARTA: {
-        // Clip para que el scroll no se dibuje fuera del card
-        RECT clip = card; InflateRect(&clip, -S(8), -S(8));
-        HRGN rgn = CreateRectRgn(clip.left, clip.top, clip.right, clip.bottom);
-        SelectClipRgn(hdc, rgn);
-
-        // Offset por scroll
-        const int yOff = -g_vscrollPos;
-
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y + yOff, L"Nuestra Carta");
-        int yAfterTitle = y + S(44); // espacio debajo del título
+        int yAfterTitle = y + S(44);
 
         // Columnas: izquierda = lista, derecha = imagen
         const int leftColW = S(300);
@@ -307,12 +335,12 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             card.top + pad + S(300) + yOff
         };
 
-        // ---- Lista de PLATOS (arriba) ----
+        // ---- Lista de PLATOS ----
         g_platoRects.clear();
         int yBtn = yAfterTitle;
         for (const auto& p : kPlatos) {
-            RECT logical{ x, yBtn, x + leftColW, yBtn + buttonH }; // sin scroll
-            RECT r = logical; OffsetRect(&r, 0, yOff);             // con scroll
+            RECT logical{ x, yBtn, x + leftColW, yBtn + buttonH };
+            RECT r = logical; OffsetRect(&r, 0, yOff);
             g_platoRects.push_back(r);
 
             COLORREF fondo = (g_platoSeleccionado == p.id) ? RGB(255, 245, 230) : RGB(255, 255, 255);
@@ -322,7 +350,7 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             yBtn += buttonH + buttonGap;
         }
 
-        // Marco + imagen de Platos
+        // Marco + imagen Platos
         DrawRoundedRect(hdc, imgRect, 12, RGB(255, 255, 255), RGB(235, 215, 190));
         for (const auto& p : kPlatos) {
             if (p.id == g_platoSeleccionado) {
@@ -332,8 +360,8 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             }
         }
 
-        // ---- ESPECIALIDADES (debajo, misma interacción) ----
-        int yEspecialTitle = max(yBtn, (imgRect.bottom - yOff)) + S(36); // lógico (sin yOff)
+        // ---- ESPECIALIDADES ----
+        int yEspecialTitle = max(yBtn, (imgRect.bottom - yOff)) + S(36);
         DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yEspecialTitle + yOff, L"Nuestras Especialidades");
 
         int yEspBtns = yEspecialTitle + S(44);
@@ -359,7 +387,7 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             yBtnEsp += buttonH + buttonGap;
         }
 
-        // Marco + imagen de Especialidad
+        // Marco + imagen Especialidad
         DrawRoundedRect(hdc, imgRectEsp, 12, RGB(255, 255, 255), RGB(235, 215, 190));
         for (const auto& e : kEspeciales) {
             if (e.id == g_especialSeleccionada) {
@@ -369,54 +397,116 @@ void PaintContent(HDC hdc, const RECT& rcClient) {
             }
         }
 
-        // ---- Medimos alto total lógico del contenido (sin offset) ----
-        int logicalBottom = max(yBtnEsp, (imgRectEsp.bottom - yOff)) + S(20); // margen
-        g_viewportH = card.bottom - card.top;
+        int logicalBottom = max(yBtnEsp, (imgRectEsp.bottom - yOff)) + S(20);
         g_contentH = (logicalBottom - card.top) + S(10);
-
-        // Quitamos el clip
-        SelectClipRgn(hdc, nullptr);
-        DeleteObject(rgn);
     } break;
 
-    case SEC_HISTORIA:
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Historia");
-        y += S(36);
-        DrawParagraph(hdc, x, y, w, L"Desde 1956, Cantina Chichilo es un ícono de barrio...");
-        break;
+    case SEC_HISTORIA: {
+        int yCur = y;
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yCur + yOff, L"Historia");
+        yCur += S(60);
 
-    case SEC_HORARIOS:
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Horarios");
-        y += S(50);
-        DrawParagraph(hdc, x, y, w, L"-Lunes de 20:30 a 00:00 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Martes de 20:30 a 00:00 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Miercoles de 20:30 a 00:00 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Jueves de 20:30 a 00:00 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Viernes de 20:30 a 00:00 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Sábados de 12:30 a 14:30 hs");
-        y += S(40);
-        DrawParagraph(hdc, x, y, w, L"-Domingos de 12:30 a 14:30 hs");
-        break;
+        int lastBottom = yCur;
 
-    case SEC_CONTACTO:
-        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, y, L"Contacto");
-        y += S(50);
-        DrawParagraph(hdc, x, y, w, L"Dirección: Camarones 1901, Esquina Terrero 2006");
-        y += S(30);
-        DrawParagraph(hdc, x, y, w, L"Capital Federal");
-        y += S(30);
-        DrawParagraph(hdc, x, y, w, L"Reservas: 011-4581-1984 / 011-4584-1263");
-        y += S(30);
-        DrawParagraph(hdc, x, y, w, L"Email: cantinachichilo@cantinachichilo.com.ar");
-        y += S(30);
-        DrawParagraph(hdc, x, y, w, L"Email: chichilo3554@hotmail.com");
-        break;
+        std::wstring p1 = L"- Desde 1956, Cantina Chichilo es un ícono de barrio...";
+        DrawParagraph(hdc, x, yCur + yOff, w, p1);
+        int h1 = MeasureParagraphHeight(hdc, g_hFontText, w, p1);
+        lastBottom = max(lastBottom, yCur + h1);
+        yCur += S(40);
+
+        std::wstring p2 = L"- Ganadora de los premios Clarin y Martin Fierro 2005";
+        DrawParagraph(hdc, x, yCur + yOff, w, p2);
+        int h2 = MeasureParagraphHeight(hdc, g_hFontText, w, p2);
+        lastBottom = max(lastBottom, yCur + h2);
+        yCur += S(40);
+
+        std::wstring p3 = L"- Cantina Chichilo de Buenos Aires desde hace 65 años al servicio del buen comer atendidos por sus dueños en un barrio de famosos La Paternal. Además la producción de pol-ka la eligió para la apertura de la novela ilusiones y el sodero de mi vida, además es el lugar preferido de Diego Maradona";
+        DrawParagraph(hdc, x, yCur + yOff, w, p3);
+        int h3 = MeasureParagraphHeight(hdc, g_hFontText, w, p3);
+        lastBottom = max(lastBottom, yCur + h3);
+
+        int logicalBottom = max(lastBottom, yCur) + S(20);
+        g_contentH = (logicalBottom - card.top) + S(10);
+    } break;
+
+    case SEC_HORARIOS: {
+        int yCur = y;
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yCur + yOff, L"Horarios");
+        yCur += S(50);
+
+        const wchar_t* lines[] = {
+            L"- Lunes de 20:30 a 00:00 hs",
+            L"- Martes de 20:30 a 00:00 hs",
+            L"- Miercoles de 20:30 a 00:00 hs",
+            L"- Jueves de 20:30 a 00:00 hs",
+            L"- Viernes de 20:30 a 00:00 hs",
+            L"- Sábados de 12:30 a 14:30 hs",
+            L"- Domingos de 12:30 a 14:30 hs"
+        };
+        int lastBottom = yCur;
+        for (auto s : lines) {
+            std::wstring t = s;
+            DrawParagraph(hdc, x, yCur + yOff, w, t);
+            int ht = MeasureParagraphHeight(hdc, g_hFontText, w, t);
+            lastBottom = max(lastBottom, yCur + ht);
+            yCur += S(40);
+        }
+
+        int logicalBottom = max(lastBottom, yCur) + S(20);
+        g_contentH = (logicalBottom - card.top) + S(10);
+    } break;
+
+    case SEC_CONTACTO: {
+        int yCur = y;
+
+        // Título
+        DrawTextLine(hdc, g_hFontTitle, RGB(30, 30, 30), x, yCur + yOff, L"Contacto");
+        yCur += S(50);
+
+        // ===== Columna derecha: MAPA =====
+        // Tamaño sugerido del recuadro del mapa
+        const int rightColW = S(420);
+        const int mapH = S(320);
+
+        RECT mapRect{
+            card.right - pad - rightColW,
+            y + yOff,                      // alineado con el inicio del contenido
+            card.right - pad,
+            y + mapH + yOff
+        };
+        DrawRoundedRect(hdc, mapRect, 12, RGB(255, 255, 255), RGB(235, 215, 190));
+        RECT mapInner = mapRect; InflateRect(&mapInner, -S(14), -S(14));
+        DrawBitmapFromResourceFitRect(hdc, mapInner, IDB_MAPA);
+
+        // ===== Columna izquierda: texto =====
+        const int leftColW = w - (rightColW + S(20)); // deja espacio para el mapa y un gap
+        const wchar_t* lines[] = {
+            L"Dirección: Camarones 1901, Esquina Terrero 2006",
+            L"Capital Federal",
+            L"Reservas: 011-4581-1984 / 011-4584-1263",
+            L"Email: cantinachichilo@cantinachichilo.com.ar",
+            L"Email: chichilo3554@hotmail.com"
+        };
+
+        int lastBottom = yCur;
+        for (auto s : lines) {
+            std::wstring t = s;
+            DrawParagraph(hdc, x, yCur + yOff, leftColW, t);
+            // Si estás usando mi versión con MeasureParagraphHeight:
+            int ht = MeasureParagraphHeight(hdc, g_hFontText, leftColW, t);
+            lastBottom = max(lastBottom, yCur + ht);
+            yCur += S(30);
+        }
+
+        // Alto lógico total: máximo entre texto y mapa
+        int logicalBottom = max(lastBottom, (mapRect.bottom - yOff)) + S(20);
+        g_contentH = (logicalBottom - card.top) + S(10);
+    } break;
     }
+
+    // Quitar clip
+    SelectClipRgn(hdc, nullptr);
+    DeleteObject(rgn);
 }
 
 void DoPaint(HWND hWnd) {
@@ -479,7 +569,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_MOUSEWHEEL:
-        if (g_section == SEC_CARTA && g_vscrollMax > 0) {
+        if (g_vscrollMax > 0) {
             int delta = GET_WHEEL_DELTA_WPARAM(wParam); // 120 por notch
             int step = S(60);
             if (delta > 0) g_vscrollPos = max(0, g_vscrollPos - step);
@@ -490,7 +580,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_VSCROLL: {
-        if (g_section != SEC_CARTA) return 0;
         SCROLLINFO si{}; si.cbSize = sizeof(si); si.fMask = SIF_ALL;
         GetScrollInfo(hWnd, SB_VERT, &si);
         int pos = g_vscrollPos;
@@ -526,14 +615,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         for (size_t i = 0; i < rects.size(); ++i) {
             if (PtInRect(&rects[i], pt)) {
                 g_section = kTabs[i].id;
-                // al cambiar de sección, reseteamos el scroll
+                // reset scroll al cambiar de sección
                 g_vscrollPos = 0;
                 InvalidateRect(hWnd, nullptr, TRUE);
                 return 0;
             }
         }
 
-        // Interacciones de Carta
+        // Interacciones de Carta (hit-test con rects ya offseteados)
         if (g_section == SEC_CARTA) {
             for (size_t i = 0; i < g_platoRects.size(); ++i) {
                 if (PtInRect(&g_platoRects[i], pt)) {
